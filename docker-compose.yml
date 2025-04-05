@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      - MONGO_INITDB_DATABASE=travelapi
+    networks:
+      - travel-api-network
+
+  travel-api:
+    build: .
+    container_name: travel-api
+    ports:
+      - "8080:8080"
+    depends_on:
+      - mongodb
+    environment:
+      - SPRING_DATA_MONGODB_HOST=mongodb
+      - SPRING_DATA_MONGODB_PORT=27017
+      - SPRING_DATA_MONGODB_DATABASE=travelapi
+      - AMADEUS_API_KEY=demo
+      - AMADEUS_API_SECRET=demo
+      - SKYSCANNER_API_KEY=demo
+    networks:
+      - travel-api-network
+
+networks:
+  travel-api-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
