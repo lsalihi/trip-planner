@@ -5,6 +5,7 @@ import com.travelapi.multidestination.model.ItinerarySearch;
 import com.travelapi.multidestination.model.dto.ItinerarySearchRequest;
 import com.travelapi.multidestination.repository.ItineraryRepository;
 import com.travelapi.multidestination.repository.ItinerarySearchRepository;
+import com.travelapi.multidestination.service.external.AmadeusFlightService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -21,6 +22,7 @@ public class ItineraryService {
 
     private final ItineraryRepository itineraryRepository;
     private final ItinerarySearchRepository itinerarySearchRepository;
+    private final ItineraryGeneratorService itineraryGeneratorService;
     
     /**
      * Crée une nouvelle recherche d'itinéraire et lance la recherche d'itinéraires correspondants
@@ -48,7 +50,8 @@ public class ItineraryService {
         
         // TODO: Implémenter la logique pour générer des itinéraires basés sur cette recherche
         // Cette partie sera implémentée dans l'étape 007 (implementer_services_integration_apis_externes)
-        
+        itineraryGeneratorService.generateItineraries(savedSearch);
+
         return savedSearch;
     }
     
