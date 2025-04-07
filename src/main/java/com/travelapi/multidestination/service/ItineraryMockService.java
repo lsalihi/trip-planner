@@ -4,7 +4,6 @@ import com.travelapi.multidestination.model.*;
 import com.travelapi.multidestination.model.dto.ItinerarySearchRequest;
 import com.travelapi.multidestination.repository.ItineraryRepository;
 import com.travelapi.multidestination.repository.ItinerarySearchRepository;
-import com.travelapi.multidestination.service.external.AmadeusFlightService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -18,18 +17,17 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-public class ItineraryService {
+public class ItineraryMockService {
 
     private final ItineraryRepository itineraryRepository;
     private final ItinerarySearchRepository itinerarySearchRepository;
-    private final AmadeusFlightService amadeusFlightService;
-
+    
     /**
      * Crée une nouvelle recherche d'itinéraire et lance la recherche d'itinéraires correspondants
      */
     public ItinerarySearch createSearch(ItinerarySearchRequest request) {
         log.info("Création d'une nouvelle recherche d'itinéraire depuis {}", request.getOrigin());
-
+        
         // Convertir la requête en entité ItinerarySearch
         ItinerarySearch search = ItinerarySearch.builder()
                 .origin(request.getOrigin())
@@ -44,16 +42,18 @@ public class ItineraryService {
                 .excludedDestinations(request.getPreferences() != null ? request.getPreferences().getExcludedDestinations() : null)
                 .createdAt(LocalDateTime.now().toLocalDate())
                 .build();
-
+        
         // Sauvegarder la recherche
         ItinerarySearch savedSearch = itinerarySearchRepository.save(search);
-
+        
+        // TODO: Implémenter la logique pour générer des itinéraires basés sur cette recherche
+        // Cette partie sera implémentée dans l'étape 007 (implementer_services_integration_apis_externes)
         // Lancer le processus de génération d'itinéraires en arrière-plan
         generateItineraries(savedSearch);
 
         return savedSearch;
     }
-
+    
     /**
      * Récupère tous les itinéraires correspondant à une recherche
      */
@@ -61,7 +61,7 @@ public class ItineraryService {
         log.info("Récupération des itinéraires pour la recherche {}", searchId);
         return itineraryRepository.findBySearchId(searchId);
     }
-
+    
     /**
      * Récupère un itinéraire par son ID
      */
@@ -69,8 +69,7 @@ public class ItineraryService {
         log.info("Récupération de l'itinéraire {}", id);
         return itineraryRepository.findById(id);
     }
-
-
+    
     /**
      * Récupère les itinéraires les moins chers
      */
@@ -78,6 +77,7 @@ public class ItineraryService {
         log.info("Récupération des 5 itinéraires les moins chers");
         return itineraryRepository.findTop5ByOrderByTotalPriceAsc();
     }
+    
     /**
      * Récupère les itinéraires dans une fourchette de prix
      */
@@ -107,18 +107,16 @@ public class ItineraryService {
             // 3. Pour chaque combinaison, chercher les vols et créer un itinéraire
             for (List<String> combination : itineraryCombinations) {
                 try {
-                    // Chercher les vols pour cette combinaison en utilisant l'API Amadeus
-                    List<FlightLeg> flights = findFlightsForCombinationWithAPI(
+                    // Chercher les vols pour cette combinaison
+                    List<FlightLeg> flights = findFlightsForCombination(
                             combination,
                             search.getDepartureDate(),
                             search.getReturnDate(),
                             search.getMinDaysPerCity(),
-                            search.getMaxDaysPerCity(),
-                            search.getBudget()
+                            search.getMaxDaysPerCity()
                     );
 
                     if (flights.isEmpty()) {
-                        log.info("Aucun vol trouvé pour la combinaison {}", combination);
                         continue; // Pas de vols trouvés pour cette combinaison
                     }
 
@@ -127,8 +125,6 @@ public class ItineraryService {
 
                     // Ne pas créer d'itinéraire si le prix dépasse le budget
                     if (totalPrice > search.getBudget()) {
-                        log.info("Prix total {} dépasse le budget {} pour la combinaison {}",
-                                totalPrice, search.getBudget(), combination);
                         continue;
                     }
 
@@ -150,137 +146,18 @@ public class ItineraryService {
                             .searchId(search.getId())
                             .build();
 
-                    log.info("Nouvel itinéraire créé avec {} villes pour un total de {}€",
-                            cities.size(), totalPrice);
                     itineraryRepository.save(itinerary);
 
                 } catch (Exception e) {
-                    log.error("Erreur lors de la création de l'itinéraire pour la combinaison {}: {}",
-                            combination, e.getMessage(), e);
+                    log.error("Erreur lors de la création de l'itinéraire pour la combinaison {}: {}", combination, e.getMessage());
                 }
             }
 
             log.info("Génération d'itinéraires terminée pour la recherche {}", search.getId());
 
         } catch (Exception e) {
-            log.error("Erreur lors de la génération d'itinéraires pour la recherche {}: {}",
-                    search.getId(), e.getMessage(), e);
+            log.error("Erreur lors de la génération d'itinéraires pour la recherche {}: {}", search.getId(), e.getMessage());
         }
-    }
-
-    /**
-     * Trouve les vols pour une combinaison de destinations en utilisant l'API Amadeus
-     */
-    private List<FlightLeg> findFlightsForCombinationWithAPI(
-            List<String> combination,
-            LocalDate departureDate,
-            LocalDate returnDate,
-            int minDaysPerCity,
-            int maxDaysPerCity,
-            double maxBudget) {
-
-        // Vérifier si nous avons assez de jours pour le voyage
-        int totalDays = (int) (returnDate.toEpochDay() - departureDate.toEpochDay());
-        int numberOfLegs = combination.size() - 1;
-
-        // Si nous n'avons pas assez de jours pour respecter le nombre minimum par ville, retourner une liste vide
-        if (totalDays < (numberOfLegs - 1) * minDaysPerCity) {
-            log.warn("Pas assez de jours ({}) pour visiter {} villes avec {} jours minimum par ville",
-                    totalDays, numberOfLegs - 1, minDaysPerCity);
-            return new ArrayList<>();
-        }
-
-        try {
-            // Préparer les données pour l'appel à l'API Amadeus
-            List<String> origins = new ArrayList<>();
-            List<String> destinations = new ArrayList<>();
-            List<LocalDate> departureDates = new ArrayList<>();
-
-            // Calculer la distribution des jours par ville
-            List<Integer> daysPerCity = distributeDaysPerCity(
-                    totalDays,
-                    numberOfLegs - 1,
-                    minDaysPerCity,
-                    maxDaysPerCity
-            );
-
-            // Générer les dates de départ pour chaque segment
-            LocalDate currentDate = departureDate;
-            for (int i = 0; i < numberOfLegs; i++) {
-                origins.add(combination.get(i));
-                destinations.add(combination.get(i + 1));
-                departureDates.add(currentDate);
-
-                // Avancer la date pour le prochain vol
-                if (i < numberOfLegs - 1) {
-                    currentDate = currentDate.plusDays(daysPerCity.get(i));
-                }
-            }
-
-            // Appeler l'API Amadeus pour obtenir les vols
-            log.info("Recherche de vols via API Amadeus pour la combinaison {}", combination);
-            List<FlightLeg> flights = amadeusFlightService.searchMultiCityFlights(
-                    origins,
-                    destinations,
-                    departureDates,
-                    maxBudget
-            );
-
-            log.info("API Amadeus a retourné {} vols pour la combinaison {}", flights.size(), combination);
-            return flights;
-
-        } catch (Exception e) {
-            log.error("Erreur lors de la recherche de vols via API Amadeus: {}", e.getMessage(), e);
-            return new ArrayList<>();
-        }
-    }
-
-    /**
-     * Distribue les jours de manière équilibrée entre les villes
-     */
-    private List<Integer> distributeDaysPerCity(int totalDays, int numberOfCities, int minDays, int maxDays) {
-        List<Integer> distribution = new ArrayList<>();
-
-        // S'il n'y a qu'une seule ville, attribuer tous les jours à cette ville
-        if (numberOfCities == 1) {
-            distribution.add(Math.min(totalDays, maxDays));
-            return distribution;
-        }
-
-        // Distribuer d'abord le minimum de jours à chaque ville
-        int remainingDays = totalDays - (numberOfCities * minDays);
-
-        // Si nous n'avons pas assez de jours pour le minimum, ajuster le minimum
-        if (remainingDays < 0) {
-            // Distribuer équitablement les jours disponibles
-            int daysPerCity = Math.max(1, totalDays / numberOfCities);
-            for (int i = 0; i < numberOfCities; i++) {
-                distribution.add(i < totalDays % numberOfCities ? daysPerCity + 1 : daysPerCity);
-            }
-            return distribution;
-        }
-
-        // Ajouter le minimum de jours à chaque ville
-        for (int i = 0; i < numberOfCities; i++) {
-            distribution.add(minDays);
-        }
-
-        // Distribuer les jours restants de manière équilibrée
-        int extraDaysPerCity = Math.min(maxDays - minDays, remainingDays / numberOfCities);
-        remainingDays -= extraDaysPerCity * numberOfCities;
-
-        for (int i = 0; i < numberOfCities; i++) {
-            distribution.set(i, distribution.get(i) + extraDaysPerCity);
-        }
-
-        // Distribuer les jours restants un par un
-        for (int i = 0; i < remainingDays && i < numberOfCities; i++) {
-            if (distribution.get(i) < maxDays) {
-                distribution.set(i, distribution.get(i) + 1);
-            }
-        }
-
-        return distribution;
     }
 
     /**
@@ -290,87 +167,105 @@ public class ItineraryService {
         // Dans une implémentation réelle, cette méthode interrogerait une base de données ou une API
         // pour obtenir des destinations en fonction des continents et intérêts préférés
 
-        // Ici, nous utilisons une liste prédéfinie de destinations européennes
-        List<String> allPossibleDestinations = List.of(
-                "PAR", "BCN", "ROM", "AMS", "LIS", "BER", "LON", "PRG", "VIE", "ATH",
-                "MAD", "BRU", "CPH", "DUB", "LUX", "OSL", "STO", "HEL", "ZRH", "MUC"
-        );
+        // Ici, nous simulons quelques destinations en Europe
+        List<String> allPossibleDestinations = List.of("PAR", "BCN", "ROM", "AMS", "LIS", "BER", "LON", "PRG", "VIE", "ATH");
 
         // Filtrer les destinations exclues
-        List<String> filteredDestinations = allPossibleDestinations.stream()
-                .filter(dest -> search.getExcludedDestinations() == null || !search.getExcludedDestinations().contains(dest))
+        return allPossibleDestinations.stream()
+                .filter(dest -> !search.getExcludedDestinations().contains(dest))
                 .filter(dest -> !dest.equals(search.getOrigin()))
                 .collect(Collectors.toList());
-
-        // Si des préférences de continent sont spécifiées, appliquer le filtre
-        if (search.getContinentPreferences() != null && !search.getContinentPreferences().isEmpty()) {
-            // Dans une implémentation réelle, nous filtrerions par continent
-            // Ici, nous supposons que toutes nos destinations sont en Europe
-            if (!search.getContinentPreferences().contains("Europe")) {
-                return new ArrayList<>(); // Si Europe n'est pas dans les préférences, retourner une liste vide
-            }
-        }
-
-        // Si des préférences d'intérêts sont spécifiées, nous pourrions filtrer davantage
-        // Dans une implémentation réelle, nous aurions une base de données d'attractions par ville
-
-        return filteredDestinations;
     }
 
     /**
      * Génère toutes les combinaisons possibles de destinations
      */
     private List<List<String>> generateItineraryCombinations(String origin, List<String> destinations, int numberOfCities) {
+        // Cette méthode génèrerait toutes les combinaisons possibles de "numberOfCities" destinations
+        // Pour simplifier, nous allons juste créer quelques combinaisons
+
         List<List<String>> combinations = new ArrayList<>();
 
         // Si nous avons moins de destinations que nécessaire, retourner une liste vide
         if (destinations.size() < numberOfCities) {
-            log.warn("Pas assez de destinations ({}) pour générer des itinéraires avec {} villes",
-                    destinations.size(), numberOfCities);
             return combinations;
         }
 
-        // Pour une implémentation complète, on utiliserait un algorithme pour générer toutes les combinaisons possibles
-        // Cependant, le nombre de combinaisons peut être très grand (n! / (k! * (n-k)!))
-        // Pour limiter le nombre d'appels API, nous générons un sous-ensemble de combinaisons
-
-        // Approche 1: Générer les combinaisons les plus populaires basées sur des données historiques
-        // Approche 2: Générer des combinaisons géographiquement cohérentes
-        // Pour cet exemple, nous générons simplement quelques combinaisons aléatoires
-
-        // Limiter le nombre de combinaisons pour éviter trop d'appels API
-        int maxCombinations = Math.min(10, (int) Math.pow(destinations.size(), numberOfCities));
-
-        // Créer une liste de destinations mélangée
-        List<String> shuffledDestinations = new ArrayList<>(destinations);
-        Collections.shuffle(shuffledDestinations);
-
-        for (int i = 0; i < Math.min(maxCombinations, shuffledDestinations.size()); i++) {
+        // Créer quelques combinaisons
+        for (int i = 0; i < Math.min(10, destinations.size()); i++) {
             List<String> combination = new ArrayList<>();
             combination.add(origin); // Ajouter l'origine
 
-            // Ajouter les destinations uniques
-            Set<String> addedDestinations = new HashSet<>();
-            for (int j = 0; addedDestinations.size() < numberOfCities && j < shuffledDestinations.size(); j++) {
-                int index = (i + j) % shuffledDestinations.size();
-                String destination = shuffledDestinations.get(index);
-                if (!addedDestinations.contains(destination)) {
-                    combination.add(destination);
-                    addedDestinations.add(destination);
-                }
-            }
-
-            // Si nous n'avons pas assez de destinations uniques, ignorer cette combinaison
-            if (addedDestinations.size() < numberOfCities) {
-                continue;
+            // Ajouter les destinations
+            for (int j = 0; j < numberOfCities; j++) {
+                int index = (i + j) % destinations.size();
+                combination.add(destinations.get(index));
             }
 
             combination.add(origin); // Ajouter l'origine comme retour
             combinations.add(combination);
         }
 
-        log.info("Générées {} combinaisons d'itinéraires avec {} villes", combinations.size(), numberOfCities);
         return combinations;
+    }
+
+    /**
+     * Trouve les vols pour une combinaison de destinations
+     */
+    private List<FlightLeg> findFlightsForCombination(
+            List<String> combination,
+            LocalDate departureDate,
+            LocalDate returnDate,
+            int minDaysPerCity,
+            int maxDaysPerCity) {
+
+        List<FlightLeg> flights = new ArrayList<>();
+
+        // Dans une implémentation réelle, cette méthode appellerait les services d'API externes
+        // pour obtenir les vols réels entre les destinations
+
+        // Ici, nous simulons des vols
+        int totalDays = (int) (returnDate.toEpochDay() - departureDate.toEpochDay());
+        int numberOfLegs = combination.size() - 1;
+
+        // Si nous n'avons pas assez de jours pour respecter le nombre minimum par ville, retourner une liste vide
+        if (totalDays < (numberOfLegs - 1) * minDaysPerCity) {
+            return flights;
+        }
+
+        // Calculer la durée de séjour pour chaque destination
+        LocalDate currentDate = departureDate;
+
+        for (int i = 0; i < numberOfLegs; i++) {
+            String from = combination.get(i);
+            String to = combination.get(i + 1);
+
+            // Déterminer la date de départ et d'arrivée
+            LocalDate flightDate = currentDate;
+
+            // Simuler un vol
+            FlightLeg flight = FlightLeg.builder()
+                    .from(from)
+                    .to(to)
+                    .departureDate(flightDate)
+                    .departureTime(java.time.LocalTime.of(10, 0)) // 10:00
+                    .arrivalDate(flightDate)
+                    .arrivalTime(java.time.LocalTime.of(12, 0)) // 12:00
+                    .airline(getRandomAirline())
+                    .flightNumber(getRandomFlightNumber())
+                    .price(getRandomPrice())
+                    .duration("2h 00m")
+                    .build();
+
+            flights.add(flight);
+
+            // Avancer la date pour le prochain vol
+            int stayDuration = i < numberOfLegs - 1 ?
+                    Math.min(maxDaysPerCity, Math.max(minDaysPerCity, totalDays / (numberOfLegs - 1))) : 0;
+            currentDate = currentDate.plusDays(stayDuration);
+        }
+
+        return flights;
     }
 
     /**
@@ -442,26 +337,6 @@ public class ItineraryService {
             tips.add("Considérez des séjours plus longs dans moins de villes pour réduire les coûts de transport.");
         }
 
-        // Vérifier les écarts de prix entre les vols
-        OptionalDouble maxPrice = flights.stream().mapToDouble(FlightLeg::getPrice).max();
-        if (maxPrice.isPresent()) {
-            double highestPrice = maxPrice.getAsDouble();
-            if (highestPrice > flightsCost / flights.size() * 1.5) {
-                // Trouver le vol le plus cher
-                FlightLeg expensiveFlight = flights.stream()
-                        .max(Comparator.comparing(FlightLeg::getPrice))
-                        .orElse(null);
-
-                if (expensiveFlight != null) {
-                    tips.add(String.format(
-                            "Le vol de %s à %s est particulièrement coûteux (%.2f€). " +
-                                    "Envisagez de changer les dates ou de trouver une alternative.",
-                            expensiveFlight.getFrom(), expensiveFlight.getTo(), expensiveFlight.getPrice()
-                    ));
-                }
-            }
-        }
-
         return tips;
     }
 
@@ -475,6 +350,19 @@ public class ItineraryService {
 
     // Méthodes utilitaires
 
+    private String getRandomAirline() {
+        String[] airlines = {"AF", "BA", "LH", "IB", "AZ", "KL", "SN", "LX"};
+        return airlines[new Random().nextInt(airlines.length)];
+    }
+
+    private String getRandomFlightNumber() {
+        return String.format("%s%d", getRandomAirline(), 1000 + new Random().nextInt(9000));
+    }
+
+    private double getRandomPrice() {
+        return 50 + new Random().nextDouble() * 200;
+    }
+
     private String getCityName(String code) {
         Map<String, String> cityNames = Map.ofEntries(
                 Map.entry("PAR", "Paris"),
@@ -487,16 +375,6 @@ public class ItineraryService {
                 Map.entry("PRG", "Prague"),
                 Map.entry("VIE", "Vienna"),
                 Map.entry("ATH", "Athens"),
-                Map.entry("MAD", "Madrid"),
-                Map.entry("BRU", "Brussels"),
-                Map.entry("CPH", "Copenhagen"),
-                Map.entry("DUB", "Dublin"),
-                Map.entry("LUX", "Luxembourg"),
-                Map.entry("OSL", "Oslo"),
-                Map.entry("STO", "Stockholm"),
-                Map.entry("HEL", "Helsinki"),
-                Map.entry("ZRH", "Zurich"),
-                Map.entry("MUC", "Munich"),
                 Map.entry("BDX", "Bordeaux")
         );
 
@@ -515,35 +393,18 @@ public class ItineraryService {
                 Map.entry("PRG", "Czech Republic"),
                 Map.entry("VIE", "Austria"),
                 Map.entry("ATH", "Greece"),
-                Map.entry("MAD", "Spain"),
-                Map.entry("BRU", "Belgium"),
-                Map.entry("CPH", "Denmark"),
-                Map.entry("DUB", "Ireland"),
-                Map.entry("LUX", "Luxembourg"),
-                Map.entry("OSL", "Norway"),
-                Map.entry("STO", "Sweden"),
-                Map.entry("HEL", "Finland"),
-                Map.entry("ZRH", "Switzerland"),
-                Map.entry("MUC", "Germany"),
                 Map.entry("BDX", "France")
         );
         return countryNames.getOrDefault(code, "Unknown");
     }
 
     private List<String> getHighlights(String code) {
-        Map<String, List<String>> highlights = Map.ofEntries(
-                Map.entry("PAR", List.of("Tour Eiffel", "Louvre", "Notre Dame")),
-                Map.entry("BCN", List.of("Sagrada Familia", "Park Güell", "La Rambla")),
-                Map.entry("ROM", List.of("Colisée", "Vatican", "Fontaine de Trevi")),
-                Map.entry("AMS", List.of("Canaux", "Musée Van Gogh", "Anne Frank House")),
-                Map.entry("LIS", List.of("Tram 28", "Tour de Belém", "Alfama")),
-                Map.entry("BER", List.of("Porte de Brandebourg", "Mur de Berlin", "Musée de Pergame")),
-                Map.entry("LON", List.of("Big Ben", "Tour de Londres", "British Museum")),
-                Map.entry("PRG", List.of("Pont Charles", "Château de Prague", "Horloge astronomique")),
-                Map.entry("VIE", List.of("Palais de Schönbrunn", "Opéra d'État", "Cathédrale Saint-Étienne")),
-                Map.entry("ATH", List.of("Acropole", "Parthénon", "Temple d'Héphaïstos")),
-                Map.entry("MAD", List.of("Musée du Prado", "Palais royal", "Plaza Mayor")),
-                Map.entry("BDX", List.of("Place de la Bourse", "Grand Théâtre", "Cité du Vin"))
+        Map<String, List<String>> highlights = Map.of(
+                "PAR", List.of("Tour Eiffel", "Louvre", "Notre Dame"),
+                "BCN", List.of("Sagrada Familia", "Park Güell", "La Rambla"),
+                "ROM", List.of("Colisée", "Vatican", "Fontaine de Trevi"),
+                "AMS", List.of("Canaux", "Musée Van Gogh", "Anne Frank House"),
+                "LIS", List.of("Tram 28", "Tour de Belém", "Alfama")
         );
 
         return highlights.getOrDefault(code, List.of("Découvrir la ville", "Cuisine locale", "Architecture"));

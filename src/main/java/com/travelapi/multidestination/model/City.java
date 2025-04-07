@@ -27,14 +27,3 @@ public class City {
     private WeatherForecast weatherForecast;
 }
 
-/**
- * Représente les prévisions météorologiques pour une ville
- */
-@Data
-@Builder
-@NoArgsConstructor
-@AllArgsConstructor
-class WeatherForecast {
-    private int averageTemp;
-    private String condition;
-}
